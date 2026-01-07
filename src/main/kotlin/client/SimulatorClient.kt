@@ -49,19 +49,6 @@ class SimulatorClient(private val baseUrl: String = "http://localhost:8080") {
         }
     }
 
-    suspend fun setHeating(isHeating: Boolean): Boolean {
-        return try {
-            val response = client.post("$baseUrl/api/environment/heating/control") {
-                contentType(ContentType.Application.Json)
-                setBody(mapOf("isHeating" to isHeating))
-            }.body<ApiResponse>()
-            response.success
-        } catch (e: Exception) {
-            println("Error setting heating: ${e.message}")
-            false
-        }
-    }
-
     @Serializable
     data class RoomHeatingResponse(
         val roomId: String,
