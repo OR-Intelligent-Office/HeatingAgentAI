@@ -13,30 +13,32 @@ class HeatingTools(
 ) : ToolSet {
     
     @Tool
-    @LLMDescription("Włącza ogrzewanie w budynku. Użyj tej funkcji gdy temperatura w pokojach jest zbyt niska lub gdy zbliża się spotkanie.")
+    @LLMDescription("Włącza ogrzewanie dla konkretnego pokoju. Użyj tej funkcji gdy temperatura w pokoju jest zbyt niska lub gdy zbliża się spotkanie w tym pokoju.")
     suspend fun turnOnHeating(
+        @LLMDescription("ID pokoju (np. 'room_208', 'room_209')") roomId: String,
         @LLMDescription("Powód włączenia ogrzewania (opcjonalne)") reason: String? = null
     ): String {
-        val success = simulatorClient.setHeating(true)
+        val success = simulatorClient.setRoomHeating(roomId, true)
         return if (success) {
-            println("✅ Heating turned ON - ${reason ?: "no reason provided"}")
-            "Ogrzewanie włączone. ${reason ?: ""}"
+            println("✅ Heating turned ON for room $roomId - ${reason ?: "no reason provided"}")
+            "Ogrzewanie włączone dla pokoju $roomId. ${reason ?: ""}"
         } else {
-            "Błąd: Nie udało się włączyć ogrzewania."
+            "Błąd: Nie udało się włączyć ogrzewania dla pokoju $roomId (pokój nie istnieje)."
         }
     }
     
     @Tool
-    @LLMDescription("Wyłącza ogrzewanie w budynku. Użyj tej funkcji gdy temperatura w pokojach jest wystarczająco wysoka lub gdy nie ma osób w budynku.")
+    @LLMDescription("Wyłącza ogrzewanie dla konkretnego pokoju. Użyj tej funkcji gdy temperatura w pokoju jest wystarczająco wysoka lub gdy nie ma osób w pokoju.")
     suspend fun turnOffHeating(
+        @LLMDescription("ID pokoju (np. 'room_208', 'room_209')") roomId: String,
         @LLMDescription("Powód wyłączenia ogrzewania (opcjonalne)") reason: String? = null
     ): String {
-        val success = simulatorClient.setHeating(false)
+        val success = simulatorClient.setRoomHeating(roomId, false)
         return if (success) {
-            println("❌ Heating turned OFF - ${reason ?: "no reason provided"}")
-            "Ogrzewanie wyłączone. ${reason ?: ""}"
+            println("❌ Heating turned OFF for room $roomId - ${reason ?: "no reason provided"}")
+            "Ogrzewanie wyłączone dla pokoju $roomId. ${reason ?: ""}"
         } else {
-            "Błąd: Nie udało się wyłączyć ogrzewania."
+            "Błąd: Nie udało się wyłączyć ogrzewania dla pokoju $roomId (pokój nie istnieje)."
         }
     }
     

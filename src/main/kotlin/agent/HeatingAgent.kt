@@ -8,10 +8,11 @@ import com.pawlowski.client.SimulatorClient
 import com.pawlowski.models.AgentMessage
 import com.pawlowski.models.EnvironmentState
 import com.pawlowski.ollamaModel
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.time.format.DateTimeFormatter
 
 class HeatingAgent(
     private val simulatorClient: SimulatorClient,
@@ -22,41 +23,51 @@ class HeatingAgent(
     private var running = false
     private var lastDecisionTime = 0L
     private var lastMessageTimestamp: String? = null
-    private val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
 
     private val systemPrompt = """
 Jesteś agentem ogrzewania w inteligentnym biurze. Twoim zadaniem jest zarządzanie ogrzewaniem w budynku.
 
-Możesz wykonywać następujące akcje:
-- turn_on_heating() - włącz ogrzewanie
-- turn_off_heating() - wyłącz ogrzewanie
-- send_message(to_agent, message) - wyślij komunikat w języku naturalnym do innego agenta
+WAŻNE: Musisz używać dostępnych narzędzi (Tools) do wykonywania akcji. Twoja odpowiedź tekstowa nie ma znaczenia - ważne jest tylko to, jakie narzędzia wywołasz.
+
+Dostępne narzędzia (Tools):
+- turn_on_heating(roomId, reason) - włącz ogrzewanie dla konkretnego pokoju (podaj ID pokoju)
+- turn_off_heating(roomId, reason) - wyłącz ogrzewanie dla konkretnego pokoju (podaj ID pokoju)
+- send_message(to_agent, message, type) - wyślij komunikat w języku naturalnym do innego agenta
+
+WAŻNE - Jak działa system ogrzewania:
+- Gdy ogrzewanie jest WŁĄCZONE dla pokoju, system automatycznie dąży do temperatury docelowej 22°C
+- Jeśli temperatura jest PONIŻEJ 22°C → system ogrzeje pokój do 22°C
+- Jeśli temperatura jest POWYŻEJ 22°C → system schłodzi pokój do 22°C (klimatyzacja/chłodzenie)
+- Gdy ogrzewanie jest WYŁĄCZONE → temperatura zbliża się do temperatury zewnętrznej (nie ma kontroli temperatury)
 
 Zasady działania:
-1. Włącz ogrzewanie gdy temperatura w jakimkolwiek pokoju < 21°C i są osoby w pokoju
-2. Włącz ogrzewanie 15 minut przed zaplanowanym spotkaniem
-3. Wyłącz ogrzewanie gdy wszystkie pokoje mają temperaturę >= 22°C (gdy są osoby) lub >= 18°C (gdy nie ma osób)
-4. Utrzymuj minimum 17°C gdy nie ma osób (zapobieganie zamarzaniu)
-5. Oszczędzaj energię - wyłącz ogrzewanie gdy nie jest potrzebne
+1. Włącz ogrzewanie dla konkretnego pokoju gdy temperatura < 21°C i są osoby w tym pokoju (system ogrzeje do 22°C)
+2. Włącz ogrzewanie dla pokoju 15 minut przed zaplanowanym spotkaniem w tym pokoju
+3. Włącz ogrzewanie dla pokoju gdy temperatura > 24°C (system schłodzi do 22°C poprzez włączenie ogrzewania)
+4. Wyłącz ogrzewanie dla pokoju gdy temperatura jest bliska 22°C i nie ma potrzeby utrzymywania temperatury
+5. Wyłącz ogrzewanie dla pokoju gdy temperatura >= 18°C i nie ma osób (oszczędność energii)
+6. Utrzymuj minimum 17°C w pokoju gdy nie ma osób (zapobieganie zamarzaniu)
+7. Oszczędzaj energię - wyłącz ogrzewanie gdy nie jest potrzebne, ale pamiętaj że włączenie ogrzewania pozwala kontrolować temperaturę (ogrzewanie i chłodzenie)
 
 Dostępni agenci do komunikacji:
 - WindowBlindsAgent: kontroluje rolety okienne (ochrona przed upałem, światło dzienne)
 - LightAgent: kontroluje światła (włącza/wyłącza)
 - PrinterAgent: kontroluje drukarki (włącza/wyłącza, zarządza zasobami)
 
-Gdy zmieniasz stan ogrzewania, rozważ czy powinieneś poinformować innych agentów w języku naturalnym.
-Na przykład: "Włączyłem ogrzewanie, ponieważ temperatura w pokoju 208 wynosi 19°C i są 2 osoby."
+PAMIĘTAJ: Zawsze używaj narzędzi (Tools) do wykonywania akcji. Nie odpowiadaj tekstowo - wywołuj narzędzia!
 """.trimIndent()
 
     private val messageProcessingPrompt = """
 Jesteś agentem ogrzewania. Otrzymałeś komunikat w języku naturalnym od innego agenta.
 
-Możesz wykonywać akcje:
-- turn_on_heating() - włącz ogrzewanie
-- turn_off_heating() - wyłącz ogrzewanie
-- send_message(to_agent, message) - odpowiedz innemu agentowi
+WAŻNE: Musisz używać dostępnych narzędzi (Tools) do wykonywania akcji. Twoja odpowiedź tekstowa nie ma znaczenia - ważne jest tylko to, jakie narzędzia wywołasz.
 
-Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, wykonaj odpowiednią akcję.
+Dostępne narzędzia (Tools):
+- turn_on_heating(roomId, reason) - włącz ogrzewanie dla konkretnego pokoju
+- turn_off_heating(roomId, reason) - wyłącz ogrzewanie dla konkretnego pokoju
+- send_message(to_agent, message, type) - odpowiedz innemu agentowi
+
+Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, WYWOŁAJ ODPOWIEDNIE NARZĘDZIA - nie odpowiadaj tekstowo!
 """.trimIndent()
     
     // Utworz Tools
@@ -135,21 +146,15 @@ Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, wykon
             return
         }
         
-        val currentHeating = simulatorClient.getHeatingState()
-        if (currentHeating == null) {
-            println("⚠️ Nie udało się pobrać stanu ogrzewania - pomijam cykl")
-            return
-        }
-
         if (state.powerOutage) {
             println("⚠️ Power outage - heating unavailable")
             return
         }
 
-        println("🔄 Cykl decyzyjny - temp zew: ${state.externalTemperature}°C, ogrzewanie: ${if (currentHeating) "ON" else "OFF"}")
+        println("🔄 Cykl decyzyjny - temp zew: ${state.externalTemperature}°C")
         
-        // Buduj prompt z aktualnym stanem
-        val prompt = buildDecisionPrompt(state, currentHeating)
+        // Buduj prompt z aktualnym stanem (per-room heating state)
+        val prompt = buildDecisionPrompt(state)
 
         // Wywołaj LLM przez AIAgent - Koog automatycznie obsłuży tool calls
         // AIAgent jest single-use, więc tworzymy nowy dla każdego wywołania
@@ -158,11 +163,6 @@ Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, wykon
             val agent = createAIAgent()
             val response = agent.run(prompt)
             println("✅ LLM odpowiedział (length: ${response.length} chars)")
-            if (response.length < 200) {
-                println("   Treść: $response")
-            } else {
-                println("   Treść (pierwsze 200 znaków): ${response.take(200)}...")
-            }
             // Tools są wywoływane automatycznie przez Koog - nie trzeba parsować odpowiedzi
         } catch (e: Exception) {
             println("❌ Błąd w cyklu decyzyjnym: ${e.javaClass.simpleName} - ${e.message}")
@@ -170,37 +170,44 @@ Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, wykon
         }
     }
 
-    private fun buildDecisionPrompt(state: EnvironmentState, currentHeating: Boolean): String {
-        val roomsInfo = state.rooms.joinToString("\n") { room ->
-            """
-            Pokój ${room.name} (${room.id}):
-            - Temperatura: ${room.temperatureSensor.temperature}°C
-            - Osoby: ${room.peopleCount}
-            - Spotkania: ${if (room.scheduledMeetings.isNotEmpty()) {
-                room.scheduledMeetings.joinToString(", ") { 
-                    "${it.title} (${it.startTime} - ${it.endTime})"
+    private suspend fun buildDecisionPrompt(state: EnvironmentState): String {
+        val roomsInfo = coroutineScope {
+            state.rooms.map { room ->
+                async {
+                    val roomHeatingState = simulatorClient.getRoomHeatingState(room.id) ?: false
+                    """
+                    Pokój ${room.name} (${room.id}):
+                    - Temperatura: ${room.temperatureSensor.temperature}°C
+                    - Ogrzewanie: ${if (roomHeatingState) "WŁĄCZONE (system dąży do 22°C - może ogrzewać lub chłodzić)" else "WYŁĄCZONE"}
+                    - Osoby: ${room.peopleCount}
+                    - Spotkania: ${if (room.scheduledMeetings.isNotEmpty()) {
+                        room.scheduledMeetings.joinToString(", ") { 
+                            "${it.title} (${it.startTime} - ${it.endTime})"
+                        }
+                    } else "brak"}
+                    """.trimIndent()
                 }
-            } else "brak"}
-            """.trimIndent()
-        }
+            }.awaitAll()
+        }.joinToString("\n")
 
         return """
 Aktualny stan środowiska:
 - Czas symulacji: ${state.simulationTime}
 - Temperatura zewnętrzna: ${state.externalTemperature}°C
-- Ogrzewanie: ${if (currentHeating) "WŁĄCZONE" else "WYŁĄCZONE"}
 - Awaria zasilania: ${if (state.powerOutage) "TAK" else "NIE"}
 
 Pokoje:
 $roomsInfo
 
-Przeanalizuj sytuację i zdecyduj czy powinieneś:
-1. Włączyć ogrzewanie
-2. Wyłączyć ogrzewanie
+Przeanalizuj sytuację dla każdego pokoju i zdecyduj czy powinieneś:
+1. Włączyć ogrzewanie (gdy temperatura < 21°C lub > 24°C)
+2. Wyłączyć ogrzewanie (gdy temperatura jest w zakresie 21-23°C i nie ma potrzeby kontroli)
 3. Wysłać komunikat do innego agenta
 4. Nic nie robić (utrzymać obecny stan)
 
-Odpowiedz w formacie JSON z akcjami do wykonania.
+PAMIĘTAJ: Włączenie ogrzewania pozwala systemowi kontrolować temperaturę - jeśli temperatura > 22°C, system automatycznie schłodzi do 22°C. Jeśli temperatura < 22°C, system automatycznie ogrzeje do 22°C.
+
+Używaj narzędzi (Tools) do wykonywania akcji - nie odpowiadaj tekstowo!
 """.trimIndent()
     }
 

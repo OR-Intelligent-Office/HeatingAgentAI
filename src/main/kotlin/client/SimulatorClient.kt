@@ -24,9 +24,9 @@ class SimulatorClient(private val baseUrl: String = "http://localhost:8080") {
             })
         }
         install(HttpTimeout) {
-            requestTimeoutMillis = 180_000 // 3 minuty dla wywołań LLM
-            connectTimeoutMillis = 10_000 // 10 sekund
-            socketTimeoutMillis = 180_000 // 3 minuty
+            requestTimeoutMillis = 10_000 // 10 sekund
+            connectTimeoutMillis = 5_000 // 5 sekund
+            socketTimeoutMillis = 10_000 // 10 sekund
         }
     }
 
@@ -58,6 +58,35 @@ class SimulatorClient(private val baseUrl: String = "http://localhost:8080") {
             response.success
         } catch (e: Exception) {
             println("Error setting heating: ${e.message}")
+            false
+        }
+    }
+
+    @Serializable
+    data class RoomHeatingResponse(
+        val roomId: String,
+        val isHeating: Boolean
+    )
+
+    suspend fun getRoomHeatingState(roomId: String): Boolean? {
+        return try {
+            val response = client.get("$baseUrl/api/environment/heating/rooms/$roomId").body<RoomHeatingResponse>()
+            response.isHeating
+        } catch (e: Exception) {
+            println("Error fetching room heating state for $roomId: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun setRoomHeating(roomId: String, isHeating: Boolean): Boolean {
+        return try {
+            val response = client.post("$baseUrl/api/environment/heating/rooms/$roomId/control") {
+                contentType(ContentType.Application.Json)
+                setBody(mapOf("isHeating" to isHeating))
+            }.body<ApiResponse>()
+            response.success
+        } catch (e: Exception) {
+            println("Error setting room heating for $roomId: ${e.message}")
             false
         }
     }
