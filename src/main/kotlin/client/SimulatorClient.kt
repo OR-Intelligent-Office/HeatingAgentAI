@@ -98,32 +98,6 @@ class SimulatorClient(private val baseUrl: String = "http://localhost:8080") {
         }
     }
 
-    suspend fun callLLM(prompt: String, systemPrompt: String): String? {
-        return try {
-            val request = LLMRequest(prompt = prompt, systemPrompt = systemPrompt)
-            val response = client.post("http://localhost:8061/internal/llm/decision") {
-                contentType(ContentType.Application.Json)
-                setBody(request)
-            }.body<LLMResponse>()
-            response.response
-        } catch (e: Exception) {
-            println("❌ Błąd wywołania LLM przez endpoint: ${e.javaClass.simpleName} - ${e.message}")
-            e.printStackTrace()
-            null
-        }
-    }
-    
-    @Serializable
-    private data class LLMRequest(
-        val prompt: String,
-        val systemPrompt: String
-    )
-    
-    @Serializable
-    private data class LLMResponse(
-        val response: String
-    )
-
     fun close() {
         client.close()
     }

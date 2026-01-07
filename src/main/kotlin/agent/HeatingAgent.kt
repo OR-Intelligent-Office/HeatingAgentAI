@@ -1,10 +1,16 @@
 package com.pawlowski.agent
 
+import ai.koog.agents.core.agent.AIAgent
+import ai.koog.agents.core.tools.ToolRegistry
+import ai.koog.agents.core.tools.reflect.tools
+import ai.koog.prompt.executor.llms.all.simpleOllamaAIExecutor
 import com.pawlowski.client.SimulatorClient
-import com.pawlowski.models.*
-import kotlinx.coroutines.*
-import kotlinx.serialization.Serializable
-import java.time.LocalDateTime
+import com.pawlowski.models.AgentMessage
+import com.pawlowski.models.EnvironmentState
+import com.pawlowski.ollamaModel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.time.format.DateTimeFormatter
 
 class HeatingAgent(
@@ -52,6 +58,27 @@ Możesz wykonywać akcje:
 
 Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, wykonaj odpowiednią akcję.
 """.trimIndent()
+    
+    // Utworz Tools
+    private val heatingTools = HeatingTools(simulatorClient, agentId)
+    
+    // Utworz ToolRegistry z Tools
+    private val toolRegistry = ToolRegistry {
+        tools(heatingTools)
+    }
+    
+    // Utworz prompt executor dla Ollama
+    private val promptExecutor = simpleOllamaAIExecutor(baseUrl = "http://localhost:11434")
+    
+    // Funkcja do tworzenia nowego AIAgent (agent jest single-use, więc tworzymy nowy dla każdego wywołania)
+    private fun createAIAgent(): AIAgent<String, String> {
+        return AIAgent(
+            promptExecutor = promptExecutor,
+            llmModel = ollamaModel,
+            systemPrompt = systemPrompt,
+            toolRegistry = toolRegistry
+        )
+    }
 
     suspend fun start() {
         running = true
@@ -124,26 +151,22 @@ Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, wykon
         // Buduj prompt z aktualnym stanem
         val prompt = buildDecisionPrompt(state, currentHeating)
 
-        // Wywołaj LLM
+        // Wywołaj LLM przez AIAgent - Koog automatycznie obsłuży tool calls
+        // AIAgent jest single-use, więc tworzymy nowy dla każdego wywołania
         try {
-            val llmResponse = simulatorClient.callLLM(prompt, systemPrompt)
-            if (llmResponse != null) {
-                println("🤖 LLM Response otrzymana (${llmResponse.length} chars)")
-                if (llmResponse.length < 200) {
-                    println("   Treść: $llmResponse")
-                } else {
-                    println("   Treść (pierwsze 200 znaków): ${llmResponse.take(200)}...")
-                }
-                
-                // Parsuj odpowiedź LLM i wykonaj akcje
-                processLLMResponse(llmResponse, state, currentHeating)
+            println("🔵 Wywołuję LLM przez AIAgent (prompt length: ${prompt.length} chars)")
+            val agent = createAIAgent()
+            val response = agent.run(prompt)
+            println("✅ LLM odpowiedział (length: ${response.length} chars)")
+            if (response.length < 200) {
+                println("   Treść: $response")
             } else {
-                println("⚠️ LLM nie odpowiedział - pomijam cykl")
-                // Nie wykonujemy żadnej akcji gdy LLM nie odpowiada
+                println("   Treść (pierwsze 200 znaków): ${response.take(200)}...")
             }
+            // Tools są wywoływane automatycznie przez Koog - nie trzeba parsować odpowiedzi
         } catch (e: Exception) {
             println("❌ Błąd w cyklu decyzyjnym: ${e.javaClass.simpleName} - ${e.message}")
-            // Nie wykonujemy żadnej akcji gdy wystąpi błąd
+            e.printStackTrace()
         }
     }
 
@@ -221,225 +244,19 @@ Aktualny stan:
 Zdecyduj czy i jak zareagować na ten komunikat.
 """.trimIndent()
 
-        // Wywołaj LLM do przetworzenia komunikatu
+        // Wywołaj LLM przez AIAgent - Koog automatycznie obsłuży tool calls
+        // AIAgent jest single-use, więc tworzymy nowy dla każdego wywołania
         try {
-            val llmResponse = simulatorClient.callLLM(prompt, messageProcessingPrompt)
-            if (llmResponse != null) {
-                println("🤖 LLM Response to message: $llmResponse")
-                processLLMMessageResponse(llmResponse, message, state, currentHeating)
-            } else {
-                println("⚠️ LLM nie odpowiedział na komunikat")
-            }
+            println("🔵 Wywołuję LLM przez AIAgent dla wiadomości (prompt length: ${prompt.length} chars)")
+            val agent = createAIAgent()
+            val response = agent.run(prompt)
+            println("✅ LLM odpowiedział na wiadomość (length: ${response.length} chars)")
+            // Tools są wywoływane automatycznie przez Koog - nie trzeba parsować odpowiedzi
         } catch (e: Exception) {
-            println("❌ Error calling LLM for message: ${e.message}")
+            println("❌ Error calling LLM for message: ${e.javaClass.simpleName} - ${e.message}")
             e.printStackTrace()
         }
     }
 
-    // Prosta analiza stanu (tymczasowo, przed integracją z LLM)
-    private fun analyzeStateForHeating(state: EnvironmentState, currentHeating: Boolean): Boolean {
-        for (room in state.rooms) {
-            val temp = room.temperatureSensor.temperature
-            val peopleCount = room.peopleCount
-            
-            // Proste reguły (tymczasowe)
-            if (peopleCount > 0 && temp < 21.0) return true
-            if (peopleCount == 0 && temp < 17.0) return true
-            
-            // Sprawdź spotkania
-            val now = LocalDateTime.parse(state.simulationTime, formatter)
-            for (meeting in room.scheduledMeetings) {
-                val startTime = LocalDateTime.parse(meeting.startTime, formatter)
-                val minutesUntil = java.time.Duration.between(now, startTime).toMinutes()
-                if (minutesUntil in 0..15) return true
-            }
-        }
-        
-        // Wyłącz jeśli wszystkie pokoje mają odpowiednią temperaturę
-        val allComfortable = state.rooms.all { room ->
-            val temp = room.temperatureSensor.temperature
-            val peopleCount = room.peopleCount
-            if (peopleCount > 0) temp >= 22.0 else temp >= 18.0
-        }
-        
-        return !allComfortable
-    }
-
-    // Tools dla LLM
-    @Serializable
-    data class TurnOnHeatingRequest(val reason: String? = null)
-
-    private suspend fun turnOnHeatingTool(request: TurnOnHeatingRequest): String {
-        val success = simulatorClient.setHeating(true)
-        return if (success) {
-            println("✅ Heating turned ON - ${request.reason ?: "no reason provided"}")
-            "Ogrzewanie włączone. ${request.reason ?: ""}"
-        } else {
-            "Błąd: Nie udało się włączyć ogrzewania."
-        }
-    }
-
-    @Serializable
-    data class TurnOffHeatingRequest(val reason: String? = null)
-
-    private suspend fun turnOffHeatingTool(request: TurnOffHeatingRequest): String {
-        val success = simulatorClient.setHeating(false)
-        return if (success) {
-            println("❌ Heating turned OFF - ${request.reason ?: "no reason provided"}")
-            "Ogrzewanie wyłączone. ${request.reason ?: ""}"
-        } else {
-            "Błąd: Nie udało się wyłączyć ogrzewania."
-        }
-    }
-
-    @Serializable
-    data class SendMessageRequest(
-        val to: String,
-        val message: String,
-        val type: String = "INFORM"
-    )
-
-    private suspend fun sendMessageTool(request: SendMessageRequest): String {
-        val messageType = when (request.type.uppercase()) {
-            "REQUEST" -> MessageType.REQUEST
-            "QUERY" -> MessageType.QUERY
-            "RESPONSE" -> MessageType.RESPONSE
-            else -> MessageType.INFORM
-        }
-
-        val messageRequest = AgentMessageRequest(
-            from = agentId,
-            to = request.to,
-            type = messageType,
-            content = request.message,
-            context = null
-        )
-
-        val success = simulatorClient.sendMessage(messageRequest)
-        return if (success) {
-            println("📤 Message sent to ${request.to}: ${request.message}")
-            "Wiadomość wysłana do ${request.to}."
-        } else {
-            "Błąd: Nie udało się wysłać wiadomości."
-        }
-    }
-
-    private suspend fun processLLMResponse(
-        response: String,
-        state: EnvironmentState,
-        currentHeating: Boolean
-    ) {
-        // Parsuj odpowiedź LLM - szukaj słów kluczowych
-        val responseLower = response.lowercase()
-        
-        // Sprawdź czy LLM chce włączyć/wyłączyć ogrzewanie
-        val shouldTurnOn = responseLower.contains("włącz") || 
-                          responseLower.contains("turn on") ||
-                          responseLower.contains("włączyć") ||
-                          (responseLower.contains("potrzeb") && responseLower.contains("ogrzew"))
-        
-        val shouldTurnOff = responseLower.contains("wyłącz") ||
-                            responseLower.contains("turn off") ||
-                            responseLower.contains("wyłączyć") ||
-                            (responseLower.contains("nie potrzeb") && responseLower.contains("ogrzew"))
-        
-        // Sprawdź czy LLM chce wysłać komunikat
-        val shouldSendMessage = responseLower.contains("wyślij") ||
-                               responseLower.contains("send") ||
-                               responseLower.contains("poinformuj")
-        
-        // Wykonaj akcje na podstawie odpowiedzi LLM
-        if (shouldTurnOn && !currentHeating) {
-            turnOnHeatingTool(TurnOnHeatingRequest("LLM: $response"))
-        } else if (shouldTurnOff && currentHeating) {
-            turnOffHeatingTool(TurnOffHeatingRequest("LLM: $response"))
-        }
-        
-        // Jeśli LLM sugeruje wysłanie komunikatu, spróbuj wyekstrahować odbiorcę i treść
-        if (shouldSendMessage) {
-            // Prosta ekstrakcja - w przyszłości można użyć bardziej zaawansowanego parsowania
-            val toAgent = extractAgentName(response)
-            if (toAgent != null) {
-                val messageContent = extractMessageContent(response) ?: "Właśnie zmieniłem stan ogrzewania."
-                sendMessageTool(SendMessageRequest(toAgent, messageContent))
-            }
-        }
-    }
-
-    private suspend fun processLLMMessageResponse(
-        response: String,
-        message: AgentMessage,
-        state: EnvironmentState,
-        currentHeating: Boolean
-    ) {
-        // Parsuj odpowiedź LLM na komunikat
-        val responseLower = response.lowercase()
-        
-        // Sprawdź czy powinien zareagować
-        val shouldReact = !responseLower.contains("nie") && 
-                         !responseLower.contains("brak") &&
-                         (responseLower.contains("włącz") ||
-                          responseLower.contains("wyłącz") ||
-                          responseLower.contains("zmień"))
-        
-        if (shouldReact) {
-            // Sprawdź czy włączyć/wyłączyć ogrzewanie
-            val shouldTurnOn = responseLower.contains("włącz") || responseLower.contains("turn on")
-            val shouldTurnOff = responseLower.contains("wyłącz") || responseLower.contains("turn off")
-            
-            if (shouldTurnOn && !currentHeating) {
-                turnOnHeatingTool(TurnOnHeatingRequest("Reakcja na komunikat: $response"))
-            } else if (shouldTurnOff && currentHeating) {
-                turnOffHeatingTool(TurnOffHeatingRequest("Reakcja na komunikat: $response"))
-            }
-            
-            // Można też odpowiedzieć na komunikat
-            val shouldRespond = responseLower.contains("odpowiedz") || responseLower.contains("reply")
-            if (shouldRespond) {
-                val replyContent = extractMessageContent(response) ?: "Zrozumiałem i zareagowałem."
-                sendMessageTool(SendMessageRequest(message.from, replyContent, "RESPONSE"))
-            }
-        }
-    }
-
-    private fun extractAgentName(response: String): String? {
-        // Prosta ekstrakcja nazwy agenta z odpowiedzi
-        val patterns = listOf(
-            "WindowBlindsAgent", "BlindsAgent", "blinds",
-            "LightAgent", "light",
-            "PrinterAgent", "printer"
-        )
-        
-        for (pattern in patterns) {
-            if (response.contains(pattern, ignoreCase = true)) {
-                return when {
-                    pattern.contains("Blinds", ignoreCase = true) -> "blinds_agent"
-                    pattern.contains("Light", ignoreCase = true) -> "light_agent"
-                    pattern.contains("Printer", ignoreCase = true) -> "printer_agent"
-                    else -> null
-                }
-            }
-        }
-        return null
-    }
-
-    private fun extractMessageContent(response: String): String? {
-        // Prosta ekstrakcja treści komunikatu
-        // Szukaj tekstu w cudzysłowach lub po dwukropku
-        val quotePattern = """"([^"]+)"""".toRegex()
-        val match = quotePattern.find(response)
-        if (match != null) {
-            return match.groupValues[1]
-        }
-        
-        // Jeśli nie ma cudzysłowów, weź tekst po ":" lub "komunikat:"
-        val colonPattern = "(?:komunikat|message|treść)[:：]\\s*(.+)".toRegex(RegexOption.IGNORE_CASE)
-        val colonMatch = colonPattern.find(response)
-        if (colonMatch != null) {
-            return colonMatch.groupValues[1].trim()
-        }
-        
-        return null
-    }
 }
 

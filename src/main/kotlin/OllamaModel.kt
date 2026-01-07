@@ -4,7 +4,7 @@ import ai.koog.prompt.llm.LLMCapability
 import ai.koog.prompt.llm.LLMProvider
 import ai.koog.prompt.llm.LLModel
 
-private const val OLLAMA_MODEL_NAME = "deepseek-r1:8b"
+private const val OLLAMA_MODEL_NAME = "llama3.1:8b"
 
 val ollamaModel = LLModel(
     provider = LLMProvider.Ollama,
