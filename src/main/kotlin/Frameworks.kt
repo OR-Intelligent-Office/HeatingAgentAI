@@ -32,14 +32,4 @@ fun Application.configureFrameworks() {
             ollama { baseUrl = "http://localhost:11434" }
         }
     }
-
-    routing {
-        route("/ai") {
-            post("/chat") {
-                val userInput = call.receive<String>()
-                val output = aiAgent(userInput, model = OpenAIModels.Chat.GPT4_1)
-                call.respondText(output)
-            }
-        }
-    }
 }

@@ -13,6 +13,9 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.Duration
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 class HeatingAgent(
     private val simulatorClient: SimulatorClient,
@@ -42,12 +45,16 @@ WAŻNE - Jak działa system ogrzewania:
 
 Zasady działania:
 1. Włącz ogrzewanie dla konkretnego pokoju gdy temperatura < 21°C i są osoby w tym pokoju (system ogrzeje do 22°C)
-2. Włącz ogrzewanie dla pokoju 15 minut przed zaplanowanym spotkaniem w tym pokoju
+2. Włącz ogrzewanie dla pokoju 15 minut przed zaplanowanym spotkaniem w tym pokoju (używaj czasu SYMULACJI z stanu środowiska, nie czasu rzeczywistego!)
 3. Włącz ogrzewanie dla pokoju gdy temperatura > 24°C (system schłodzi do 22°C poprzez włączenie ogrzewania)
 4. Wyłącz ogrzewanie dla pokoju gdy temperatura jest bliska 22°C i nie ma potrzeby utrzymywania temperatury
 5. Wyłącz ogrzewanie dla pokoju gdy temperatura >= 18°C i nie ma osób (oszczędność energii)
 6. Utrzymuj minimum 17°C w pokoju gdy nie ma osób (zapobieganie zamarzaniu)
 7. Oszczędzaj energię - wyłącz ogrzewanie gdy nie jest potrzebne, ale pamiętaj że włączenie ogrzewania pozwala kontrolować temperaturę (ogrzewanie i chłodzenie)
+
+WAŻNE - Czas:
+- Zawsze używaj czasu SYMULACJI (simulationTime) z aktualnego stanu środowiska do porównywania z czasami spotkań
+- NIE używaj czasu rzeczywistego - porównuj czasy spotkań z czasem symulacji!
 
 Dostępni agenci do komunikacji:
 - WindowBlindsAgent: kontroluje rolety okienne (ochrona przed upałem, światło dzienne)
@@ -151,7 +158,68 @@ Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, WYWO�
             return
         }
 
-        println("🔄 Cykl decyzyjny - temp zew: ${state.externalTemperature}°C")
+        // Loguj temperatury wszystkich pokoi dla lepszej analizy decyzji
+        val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
+        val currentTime = try {
+            LocalDateTime.parse(state.simulationTime, formatter)
+        } catch (e: Exception) {
+            println("⚠️ Błąd parsowania czasu symulacji: ${state.simulationTime}")
+            null
+        }
+        
+        println("🔄 Cykl decyzyjny - czas symulacji: ${state.simulationTime} | temp zew: ${String.format("%.1f", state.externalTemperature)}°C")
+        coroutineScope {
+            state.rooms.forEach { room ->
+                val roomHeatingState = async { simulatorClient.getRoomHeatingState(room.id) ?: false }
+                val heatingState = roomHeatingState.await()
+                
+                // Znajdź 2 najbliższe spotkania (włącznie z aktualnym)
+                val upcomingMeetings = if (currentTime != null && room.scheduledMeetings.isNotEmpty()) {
+                    room.scheduledMeetings
+                        .mapNotNull { meeting ->
+                            try {
+                                val startTime = LocalDateTime.parse(meeting.startTime, formatter)
+                                val endTime = LocalDateTime.parse(meeting.endTime, formatter)
+                                // Weź spotkania które jeszcze się nie skończyły
+                                if (endTime.isAfter(currentTime)) {
+                                    Triple(meeting, startTime, endTime)
+                                } else null
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                        .sortedBy { it.second } // Sortuj po startTime
+                        .take(2) // Weź 2 najbliższe
+                        .map { 
+                            val (meeting, start, end) = it
+                            val timeInfo = when {
+                                // Spotkanie trwa
+                                start.isBefore(currentTime) && end.isAfter(currentTime) -> {
+                                    val minutesLeft = Duration.between(currentTime, end).toMinutes()
+                                    "TRWA (zostało ${minutesLeft} min)"
+                                }
+                                // Spotkanie nadchodzące
+                                start.isAfter(currentTime) -> {
+                                    val minutesUntil = Duration.between(currentTime, start).toMinutes()
+                                    "za ${minutesUntil} min"
+                                }
+                                else -> "ZAKOŃCZONE"
+                            }
+                            "${meeting.title} [$timeInfo]"
+                        }
+                } else {
+                    emptyList()
+                }
+                
+                val meetingsInfo = if (upcomingMeetings.isNotEmpty()) {
+                    " | Spotkania: ${upcomingMeetings.joinToString(", ")}"
+                } else {
+                    " | Spotkania: brak"
+                }
+                
+                println("   📍 ${room.name}: ${String.format("%.1f", room.temperatureSensor.temperature)}°C | Ogrzewanie: ${if (heatingState) "ON" else "OFF"} | Osoby: ${room.peopleCount}$meetingsInfo")
+            }
+        }
         
         // Buduj prompt z aktualnym stanem (per-room heating state)
         val prompt = buildDecisionPrompt(state)
@@ -171,20 +239,66 @@ Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, WYWO�
     }
 
     private suspend fun buildDecisionPrompt(state: EnvironmentState): String {
+        val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
+        val currentTime = try {
+            LocalDateTime.parse(state.simulationTime, formatter)
+        } catch (e: Exception) {
+            null
+        }
+        
         val roomsInfo = coroutineScope {
             state.rooms.map { room ->
                 async {
                     val roomHeatingState = simulatorClient.getRoomHeatingState(room.id) ?: false
+                    
+                    // Formatuj spotkania z czasem do rozpoczęcia/końca
+                    val meetingsText = if (room.scheduledMeetings.isNotEmpty() && currentTime != null) {
+                        room.scheduledMeetings
+                            .mapNotNull { meeting ->
+                                try {
+                                    val startTime = LocalDateTime.parse(meeting.startTime, formatter)
+                                    val endTime = LocalDateTime.parse(meeting.endTime, formatter)
+                                    if (endTime.isAfter(currentTime)) {
+                                        Triple(meeting, startTime, endTime)
+                                    } else null
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            }
+                            .sortedBy { it.second } // Sortuj po startTime
+                            .take(2) // Weź 2 najbliższe
+                            .mapNotNull { (meeting, start, end) ->
+                                val timeInfo = when {
+                                    start.isBefore(currentTime) && end.isAfter(currentTime) -> {
+                                        val minutesLeft = Duration.between(currentTime, end).toMinutes()
+                                        "TRWA (zostało ${minutesLeft} min)"
+                                    }
+                                    start.isAfter(currentTime) -> {
+                                        val minutesUntil = Duration.between(currentTime, start).toMinutes()
+                                        "za ${minutesUntil} min"
+                                    }
+                                    else -> null
+                                }
+                                if (timeInfo != null) {
+                                    "${meeting.title} [$timeInfo]"
+                                } else null
+                            }
+                            .joinToString(", ")
+                            .ifEmpty { "brak" }
+                    } else if (room.scheduledMeetings.isNotEmpty()) {
+                        room.scheduledMeetings.take(2).joinToString(", ") { 
+                            "${it.title} (${it.startTime} - ${it.endTime})"
+                        }
+                    } else {
+                        "brak"
+                    }
+                    
                     """
                     Pokój ${room.name} (${room.id}):
                     - Temperatura: ${room.temperatureSensor.temperature}°C
                     - Ogrzewanie: ${if (roomHeatingState) "WŁĄCZONE (system dąży do 22°C - może ogrzewać lub chłodzić)" else "WYŁĄCZONE"}
                     - Osoby: ${room.peopleCount}
-                    - Spotkania: ${if (room.scheduledMeetings.isNotEmpty()) {
-                        room.scheduledMeetings.joinToString(", ") { 
-                            "${it.title} (${it.startTime} - ${it.endTime})"
-                        }
-                    } else "brak"}
+                    - Spotkania: $meetingsText
                     """.trimIndent()
                 }
             }.awaitAll()
@@ -192,7 +306,7 @@ Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, WYWO�
 
         return """
 Aktualny stan środowiska:
-- Czas symulacji: ${state.simulationTime}
+- CZAS SYMULACJI (używaj tego do porównywania z czasami spotkań!): ${state.simulationTime}
 - Temperatura zewnętrzna: ${state.externalTemperature}°C
 - Awaria zasilania: ${if (state.powerOutage) "TAK" else "NIE"}
 
@@ -204,6 +318,8 @@ Przeanalizuj sytuację dla każdego pokoju i zdecyduj czy powinieneś:
 2. Wyłączyć ogrzewanie (gdy temperatura jest w zakresie 21-23°C i nie ma potrzeby kontroli)
 3. Wysłać komunikat do innego agenta
 4. Nic nie robić (utrzymać obecny stan)
+
+WAŻNE - Do oceny czy spotkanie jest "15 minut przed", porównuj czas startTime spotkania z CZASEM SYMULACJI powyżej. NIE używaj czasu rzeczywistego!
 
 PAMIĘTAJ: Włączenie ogrzewania pozwala systemowi kontrolować temperaturę - jeśli temperatura > 22°C, system automatycznie schłodzi do 22°C. Jeśli temperatura < 22°C, system automatycznie ogrzeje do 22°C.
 
