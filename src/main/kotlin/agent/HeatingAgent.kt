@@ -43,14 +43,24 @@ WAŻNE - Jak działa system ogrzewania:
 - Jeśli temperatura jest POWYŻEJ 22°C → system schłodzi pokój do 22°C (klimatyzacja/chłodzenie)
 - Gdy ogrzewanie jest WYŁĄCZONE → temperatura zbliża się do temperatury zewnętrznej (nie ma kontroli temperatury)
 
-Zasady działania:
-1. Włącz ogrzewanie dla konkretnego pokoju gdy temperatura < 21°C i są osoby w tym pokoju (system ogrzeje do 22°C)
-2. Włącz ogrzewanie dla pokoju 15 minut przed zaplanowanym spotkaniem w tym pokoju (używaj czasu SYMULACJI z stanu środowiska, nie czasu rzeczywistego!)
-3. Włącz ogrzewanie dla pokoju gdy temperatura > 24°C (system schłodzi do 22°C poprzez włączenie ogrzewania)
-4. Wyłącz ogrzewanie dla pokoju gdy temperatura jest bliska 22°C i nie ma potrzeby utrzymywania temperatury
-5. Wyłącz ogrzewanie dla pokoju gdy temperatura >= 18°C i nie ma osób (oszczędność energii)
-6. Utrzymuj minimum 17°C w pokoju gdy nie ma osób (zapobieganie zamarzaniu)
-7. Oszczędzaj energię - wyłącz ogrzewanie gdy nie jest potrzebne, ale pamiętaj że włączenie ogrzewania pozwala kontrolować temperaturę (ogrzewanie i chłodzenie)
+Zasady działania (WAŻNE - decyduj logicznie i konsekwentnie):
+1. WŁĄCZ ogrzewanie gdy:
+   a) temperatura < 21°C i są osoby w pokoju (system ogrzeje do 22°C)
+   b) temperatura > 24°C (system schłodzi do 22°C - PAMIĘTAJ: włączenie ogrzewania przy wysokiej temp schłodzi!)
+   c) spotkanie zaczyna się za 15 minut lub mniej (używaj czasu SYMULACJI, nie rzeczywistego!)
+   
+2. WYŁĄCZ ogrzewanie gdy:
+   a) temperatura jest w zakresie 21-23°C i NIE ma osoby w pokoju i NIE ma nadchodzącego spotkania (blisko 22°C, nie ma potrzeby)
+   b) temperatura >= 18°C i nie ma osób i nie ma nadchodzących spotkań (oszczędność energii)
+   
+3. UTRZYMAJ ogrzewanie włączone gdy:
+   a) temperatura < 21°C lub > 24°C (potrzebna kontrola temperatury)
+   b) są osoby w pokoju i temperatura nie jest idealna (21-23°C)
+   c) spotkanie trwa lub zaczyna się wkrótce (do 15 min)
+
+4. Utrzymuj minimum 17°C w pokoju gdy nie ma osób (zapobieganie zamarzaniu)
+
+WAŻNE: Sprawdzaj aktualny stan ogrzewania dla każdego pokoju - nie wyłączaj ogrzewania jeśli już jest wyłączone, nie włączaj jeśli już jest włączone (chyba że warunki się zmieniły). Działaj tylko gdy zmiana jest potrzebna!
 
 WAŻNE - Czas:
 - Zawsze używaj czasu SYMULACJI (simulationTime) z aktualnego stanu środowiska do porównywania z czasami spotkań
@@ -313,13 +323,22 @@ Aktualny stan środowiska:
 Pokoje:
 $roomsInfo
 
-Przeanalizuj sytuację dla każdego pokoju i zdecyduj czy powinieneś:
-1. Włączyć ogrzewanie (gdy temperatura < 21°C lub > 24°C)
-2. Wyłączyć ogrzewanie (gdy temperatura jest w zakresie 21-23°C i nie ma potrzeby kontroli)
-3. Wysłać komunikat do innego agenta
-4. Nic nie robić (utrzymać obecny stan)
+Dla każdego pokoju:
+1. Sprawdź aktualny stan ogrzewania (w informacjach o pokoju)
+2. Oceń czy zmiana jest potrzebna:
+   - Jeśli ogrzewanie WŁĄCZONE i warunki nie wymagają utrzymania → WYŁĄCZ
+   - Jeśli ogrzewanie WYŁĄCZONE i warunki wymagają kontroli → WŁĄCZ
+   - Jeśli obecny stan jest odpowiedni → NIC NIE RÓB
+3. Decyduj logicznie - NIE wywołuj narzędzia jeśli stan jest już prawidłowy!
 
-WAŻNE - Do oceny czy spotkanie jest "15 minut przed", porównuj czas startTime spotkania z CZASEM SYMULACJI powyżej. NIE używaj czasu rzeczywistego!
+Zasady włączania/wyłączania:
+- Temperatura > 24°C → WŁĄCZ ogrzewanie (schłodzi do 22°C)
+- Temperatura < 21°C → WŁĄCZ ogrzewanie (ogrzeje do 22°C)
+- Temperatura 21-23°C → możesz wyłączyć TYLKO jeśli nie ma osób i nie ma spotkań
+- Spotkanie za ≤15 min → WŁĄCZ ogrzewanie
+- Spotkanie trwa → UTRZYMAJ ogrzewanie włączone
+
+WAŻNE - Do oceny czy spotkanie jest "15 minut przed", odejmij czas SYMULACJI od czasu start spotkania. NIE używaj czasu rzeczywistego!
 
 PAMIĘTAJ: Włączenie ogrzewania pozwala systemowi kontrolować temperaturę - jeśli temperatura > 22°C, system automatycznie schłodzi do 22°C. Jeśli temperatura < 22°C, system automatycznie ogrzeje do 22°C.
 
