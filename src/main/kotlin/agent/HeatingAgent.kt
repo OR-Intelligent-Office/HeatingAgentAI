@@ -262,7 +262,10 @@ Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, WYWO�
         }
     }
 
-    private suspend fun buildDecisionPrompt(state: EnvironmentState): String {
+    /**
+     * Formatuje informacje o pokojach do tekstu (wspólna funkcja używana w promptach)
+     */
+    private suspend fun formatRoomsInfo(state: EnvironmentState, includeMeetings: Boolean = true): String {
         val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
         val currentTime = try {
             LocalDateTime.parse(state.simulationTime, formatter)
@@ -270,63 +273,78 @@ Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, WYWO�
             null
         }
         
-        val roomsInfo = coroutineScope {
+        return coroutineScope {
             state.rooms.map { room ->
                 async {
                     val roomHeatingState = simulatorClient.getRoomHeatingState(room.id) ?: false
                     
-                    // Formatuj spotkania z czasem do rozpoczęcia/końca
-                    val meetingsText = if (room.scheduledMeetings.isNotEmpty() && currentTime != null) {
-                        room.scheduledMeetings
-                            .mapNotNull { meeting ->
-                                try {
-                                    val startTime = LocalDateTime.parse(meeting.startTime, formatter)
-                                    val endTime = LocalDateTime.parse(meeting.endTime, formatter)
-                                    if (endTime.isAfter(currentTime)) {
-                                        Triple(meeting, startTime, endTime)
+                    // Formatuj spotkania z czasem do rozpoczęcia/końca (jeśli requested)
+                    val meetingsText = if (includeMeetings) {
+                        if (room.scheduledMeetings.isNotEmpty() && currentTime != null) {
+                            room.scheduledMeetings
+                                .mapNotNull { meeting ->
+                                    try {
+                                        val startTime = LocalDateTime.parse(meeting.startTime, formatter)
+                                        val endTime = LocalDateTime.parse(meeting.endTime, formatter)
+                                        if (endTime.isAfter(currentTime)) {
+                                            Triple(meeting, startTime, endTime)
+                                        } else null
+                                    } catch (e: Exception) {
+                                        null
+                                    }
+                                }
+                                .sortedBy { it.second } // Sortuj po startTime
+                                .take(2) // Weź 2 najbliższe
+                                .mapNotNull { (meeting, start, end) ->
+                                    val timeInfo = when {
+                                        start.isBefore(currentTime) && end.isAfter(currentTime) -> {
+                                            val minutesLeft = Duration.between(currentTime, end).toMinutes()
+                                            "TRWA (zostało ${minutesLeft} min)"
+                                        }
+                                        start.isAfter(currentTime) -> {
+                                            val minutesUntil = Duration.between(currentTime, start).toMinutes()
+                                            "za ${minutesUntil} min"
+                                        }
+                                        else -> null
+                                    }
+                                    if (timeInfo != null) {
+                                        "${meeting.title} [$timeInfo]"
                                     } else null
-                                } catch (e: Exception) {
-                                    null
                                 }
+                                .joinToString(", ")
+                                .ifEmpty { "brak" }
+                        } else if (room.scheduledMeetings.isNotEmpty()) {
+                            room.scheduledMeetings.take(2).joinToString(", ") { 
+                                "${it.title} (${it.startTime} - ${it.endTime})"
                             }
-                            .sortedBy { it.second } // Sortuj po startTime
-                            .take(2) // Weź 2 najbliższe
-                            .mapNotNull { (meeting, start, end) ->
-                                val timeInfo = when {
-                                    start.isBefore(currentTime) && end.isAfter(currentTime) -> {
-                                        val minutesLeft = Duration.between(currentTime, end).toMinutes()
-                                        "TRWA (zostało ${minutesLeft} min)"
-                                    }
-                                    start.isAfter(currentTime) -> {
-                                        val minutesUntil = Duration.between(currentTime, start).toMinutes()
-                                        "za ${minutesUntil} min"
-                                    }
-                                    else -> null
-                                }
-                                if (timeInfo != null) {
-                                    "${meeting.title} [$timeInfo]"
-                                } else null
-                            }
-                            .joinToString(", ")
-                            .ifEmpty { "brak" }
-                    } else if (room.scheduledMeetings.isNotEmpty()) {
-                        room.scheduledMeetings.take(2).joinToString(", ") { 
-                            "${it.title} (${it.startTime} - ${it.endTime})"
+                        } else {
+                            "brak"
                         }
                     } else {
-                        "brak"
+                        "" // Nie wyświetlaj spotkań jeśli includeMeetings = false
+                    }
+                    
+                    val meetingsPart = if (includeMeetings) {
+                        """
+                    - Spotkania: $meetingsText
+                    """.trimIndent()
+                    } else {
+                        ""
                     }
                     
                     """
                     Pokój ${room.name} (${room.id}):
                     - Temperatura: ${room.temperatureSensor.temperature}°C
                     - Ogrzewanie: ${if (roomHeatingState) "WŁĄCZONE (system dąży do 22°C - może ogrzewać lub chłodzić)" else "WYŁĄCZONE"}
-                    - Osoby: ${room.peopleCount}
-                    - Spotkania: $meetingsText
+                    - Osoby: ${room.peopleCount}$meetingsPart
                     """.trimIndent()
                 }
             }.awaitAll()
         }.joinToString("\n")
+    }
+
+    private suspend fun buildDecisionPrompt(state: EnvironmentState): String {
+        val roomsInfo = formatRoomsInfo(state, includeMeetings = true)
 
         return """
 Aktualny stan środowiska:
@@ -389,7 +407,8 @@ Używaj narzędzi (Tools) do wykonywania akcji - nie odpowiadaj tekstowo!
 
     private suspend fun awaitProcessMessage(message: AgentMessage) {
         val state = simulatorClient.getEnvironmentState() ?: return
-        val currentHeating = simulatorClient.getHeatingState() ?: return
+        
+        val roomsInfo = formatRoomsInfo(state, includeMeetings = false)
 
         val prompt = """
 $messageProcessingPrompt
@@ -399,10 +418,13 @@ Od: ${message.from}
 Treść: "${message.content}"
 Kontekst: ${message.context ?: "brak"}
 
-Aktualny stan:
-- Ogrzewanie: ${if (currentHeating) "WŁĄCZONE" else "WYŁĄCZONE"}
+Aktualny stan środowiska:
+- CZAS SYMULACJI: ${state.simulationTime}
 - Temperatura zewnętrzna: ${state.externalTemperature}°C
-- Pokoje: ${state.rooms.joinToString(", ") { "${it.name} (${it.temperatureSensor.temperature}°C, ${it.peopleCount} os.)" }}
+- Awaria zasilania: ${if (state.powerOutage) "TAK" else "NIE"}
+
+Pokoje:
+$roomsInfo
 
 Zdecyduj czy i jak zareagować na ten komunikat.
 """.trimIndent()
