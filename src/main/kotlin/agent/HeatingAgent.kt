@@ -32,10 +32,15 @@ Jesteś agentem ogrzewania w inteligentnym biurze. Twoim zadaniem jest zarządza
 
 WAŻNE: Musisz używać dostępnych narzędzi (Tools) do wykonywania akcji. Twoja odpowiedź tekstowa nie ma znaczenia - ważne jest tylko to, jakie narzędzia wywołasz.
 
-Dostępne narzędzia (Tools):
-- turn_on_heating(roomId, reason) - włącz ogrzewanie dla konkretnego pokoju (podaj ID pokoju)
-- turn_off_heating(roomId, reason) - wyłącz ogrzewanie dla konkretnego pokoju (podaj ID pokoju)
-- send_message(to_agent, message, type) - wyślij komunikat w języku naturalnym do innego agenta
+Dostępne narzędzia (Tools) - MUSISZ JE WYWOŁAĆ:
+- turnOnHeating(roomId, reason) - włącz ogrzewanie dla konkretnego pokoju (podaj ID pokoju)
+- turnOffHeating(roomId, reason) - wyłącz ogrzewanie dla konkretnego pokoju (podaj ID pokoju)
+- sendMessage(toAgent, message, type) - WYSYŁAJ KOMUNIKATY DO INNYCH AGENTÓW gdy potrzebujesz współpracy:
+  * Przykłady użycia:
+    - Jeśli temperatura jest bardzo wysoka (np. > 26°C) → wyślij REQUEST do WindowBlindsAgent żeby zasłonił rolety
+    - Jeśli ogrzewanie nie wystarcza (temp nie rośnie) → wyślij INFORM do LightAgent że może potrzebować dodatkowego ciepła
+    - Jeśli musisz wyłączyć ogrzewanie ze względu na oszczędność → możesz powiadomić innych agentów
+  * Parametry: toAgent (WindowBlindsAgent, LightAgent, PrinterAgent lub 'broadcast'), message (treść po polsku), type (REQUEST/INFORM/QUERY/RESPONSE)
 
 WAŻNE - Jak działa system ogrzewania:
 - Gdy ogrzewanie jest WŁĄCZONE dla pokoju, system automatycznie dąży do temperatury docelowej 22°C
@@ -66,12 +71,21 @@ WAŻNE - Czas:
 - Zawsze używaj czasu SYMULACJI (simulationTime) z aktualnego stanu środowiska do porównywania z czasami spotkań
 - NIE używaj czasu rzeczywistego - porównuj czasy spotkań z czasem symulacji!
 
-Dostępni agenci do komunikacji:
+Dostępni agenci do komunikacji (używaj sendMessage do komunikacji z nimi):
 - WindowBlindsAgent: kontroluje rolety okienne (ochrona przed upałem, światło dzienne)
+  → Wysyłaj REQUEST gdy temperatura jest bardzo wysoka (>26°C) aby zasłonić rolety i zmniejszyć nagrzewanie
 - LightAgent: kontroluje światła (włącza/wyłącza)
+  → Wysyłaj INFORM o stanie ogrzewania lub potrzebach dotyczących temperatury
 - PrinterAgent: kontroluje drukarki (włącza/wyłącza, zarządza zasobami)
+  → Wysyłaj INFORM o stanie ogrzewania w pokojach z drukarkami
 
-PAMIĘTAJ: Zawsze używaj narzędzi (Tools) do wykonywania akcji. Nie odpowiadaj tekstowo - wywołuj narzędzia!
+KOMUNIKACJA Z INNYMI AGENTAMI:
+- Wysyłaj wiadomości gdy sytuacja tego wymaga (np. bardzo wysoka temperatura, potrzeba współpracy)
+- Używaj sendMessage() - TO JEST NARZĘDZIE KTÓRE MUSISZ WYWOŁAĆ, tak jak turnOnHeating czy turnOffHeating
+- Przykład: sendMessage("WindowBlindsAgent", "Temperatura w pokoju room_208 przekracza 26°C, proszę zasłonić rolety aby zmniejszyć nagrzewanie", "REQUEST")
+- WAŻNE: Wysyłaj wiadomości gdy temperatura > 26°C lub gdy potrzebujesz współpracy z innymi agentami!
+
+PAMIĘTAJ: Zawsze używaj narzędzi (Tools) do wykonywania akcji - włączanie/wyłączanie ogrzewania I wysyłanie wiadomości! Nie odpowiadaj tekstowo - wywołuj narzędzia!
 """.trimIndent()
 
     private val messageProcessingPrompt = """
@@ -80,9 +94,9 @@ Jesteś agentem ogrzewania. Otrzymałeś komunikat w języku naturalnym od inneg
 WAŻNE: Musisz używać dostępnych narzędzi (Tools) do wykonywania akcji. Twoja odpowiedź tekstowa nie ma znaczenia - ważne jest tylko to, jakie narzędzia wywołasz.
 
 Dostępne narzędzia (Tools):
-- turn_on_heating(roomId, reason) - włącz ogrzewanie dla konkretnego pokoju
-- turn_off_heating(roomId, reason) - wyłącz ogrzewanie dla konkretnego pokoju
-- send_message(to_agent, message, type) - odpowiedz innemu agentowi
+- turnOnHeating(roomId, reason) - włącz ogrzewanie dla konkretnego pokoju
+- turnOffHeating(roomId, reason) - wyłącz ogrzewanie dla konkretnego pokoju
+- sendMessage(toAgent, message, type) - odpowiedz innemu agentowi
 
 Przeanalizuj komunikat i zdecyduj czy powinieneś zareagować. Jeśli tak, WYWOŁAJ ODPOWIEDNIE NARZĘDZIA - nie odpowiadaj tekstowo!
 """.trimIndent()
@@ -329,7 +343,14 @@ Dla każdego pokoju:
    - Jeśli ogrzewanie WŁĄCZONE i warunki nie wymagają utrzymania → WYŁĄCZ
    - Jeśli ogrzewanie WYŁĄCZONE i warunki wymagają kontroli → WŁĄCZ
    - Jeśli obecny stan jest odpowiedni → NIC NIE RÓB
-3. Decyduj logicznie - NIE wywołuj narzędzia jeśli stan jest już prawidłowy!
+3. Sprawdź czy powinieneś WYSŁAĆ WIADOMOŚĆ do innego agenta:
+   - Jeśli temperatura > 26°C → wyślij REQUEST do WindowBlindsAgent aby zasłonił rolety (użyj sendMessage tool!)
+   - Jeśli potrzebujesz współpracy z innym agentem → wyślij odpowiedni komunikat
+   - PRZYKŁAD: sendMessage("WindowBlindsAgent", "Temperatura w room_208 przekracza 26°C, proszę zasłonić rolety", "REQUEST")
+4. Decyduj logicznie - NIE wywołuj narzędzia jeśli stan jest już prawidłowy!
+
+WAŻNE: sendMessage TO JEST NARZĘDZIE (tool) - MUSISZ JE WYWOŁAĆ tak jak turnOnHeating czy turnOffHeating!
+WYSYŁAJ WIADOMOŚCI - to jest ważna funkcja! Używaj sendMessage gdy temperatura jest bardzo wysoka (>26°C)!
 
 Zasady włączania/wyłączania:
 - Temperatura > 24°C → WŁĄCZ ogrzewanie (schłodzi do 22°C)

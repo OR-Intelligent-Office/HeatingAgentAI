@@ -45,7 +45,7 @@ class HeatingTools(
     @Tool
     @LLMDescription("Wysyła komunikat w języku naturalnym do innego agenta. Użyj tego do komunikacji z innymi agentami w systemie.")
     suspend fun sendMessage(
-        @LLMDescription("ID agenta docelowego (np. 'WindowBlindsAgent', 'LightAgent', 'PrinterAgent') lub 'broadcast' dla wszystkich") to: String,
+        @LLMDescription("ID agenta docelowego (np. 'WindowBlindsAgent', 'LightAgent', 'PrinterAgent') lub 'broadcast' dla wszystkich") toAgent: String,
         @LLMDescription("Treść wiadomości w języku naturalnym") message: String,
         @LLMDescription("Typ wiadomości: 'INFORM', 'REQUEST', 'QUERY', 'RESPONSE' (domyślnie 'INFORM')") type: String = "INFORM"
     ): String {
@@ -58,7 +58,7 @@ class HeatingTools(
 
         val messageRequest = AgentMessageRequest(
             from = agentId,
-            to = to,
+            to = toAgent,
             type = messageType,
             content = message,
             context = null
@@ -66,8 +66,8 @@ class HeatingTools(
 
         val success = simulatorClient.sendMessage(messageRequest)
         return if (success) {
-            println("📤 Message sent to $to: $message")
-            "Wiadomość wysłana do $to."
+            println("📤 Message sent to $toAgent: $message")
+            "Wiadomość wysłana do $toAgent."
         } else {
             "Błąd: Nie udało się wysłać wiadomości."
         }
