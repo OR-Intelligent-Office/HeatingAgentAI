@@ -19,7 +19,7 @@ import java.time.format.DateTimeFormatter
 
 class HeatingAgent(
     private val simulatorClient: SimulatorClient,
-    private val agentId: String = "heating_agent",
+    private val agentId: String = "HeatingAgent",
     private val decisionIntervalSeconds: Long = 10,
     private val messageCheckIntervalSeconds: Long = 3
 ) {
